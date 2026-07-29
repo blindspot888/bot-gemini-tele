@@ -1,44 +1,54 @@
 import os
+import json
 import asyncio
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Bot
 import google.generativeai as genai
 
-# 1. Ambil Kunci Rahasia dari Environment Variables (Render)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OFFSET_FILE = "offset.json"
 
-# Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-# Command /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo Bro! Bot Gemini siap bantu kamu. Langsung ketik pertanyaanmu!")
+def load_offset():
+    if os.path.exists(OFFSET_FILE):
+        with open(OFFSET_FILE, "r") as f:
+            return json.load(f).get("offset", 0)
+    return 0
 
-# Fungsi Utama untuk Menjawab Chat Teks
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    
-    # Efek 'typing...' di Telegram biar kelihatan lagi mikir
-    await update.message.chat.send_action(action="typing")
-    
+def save_offset(offset):
+    with open(OFFSET_FILE, "w") as f:
+        json.dump({"offset": offset}, f)
+
+async def ask_gemini(text: str) -> str:
     try:
-        # Minta jawaban ke Gemini
-        response = model.generate_content(user_text)
-        await update.message.reply_text(response.text)
+        response = model.generate_content(text)
+        return response.text
     except Exception as e:
-        await update.message.reply_text(f"Duh, ada error bro: {str(e)}")
+        return f"Duh, ada error bro: {str(e)}"
 
-# Jalankan Bot
-def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("Bot Gemini sukses jalan!")
-    app.run_polling()
+async def main():
+    offset = load_offset()
+    updates = await bot.get_updates(offset=offset, timeout=10)
+
+    for update in updates:
+        offset = update.update_id + 1
+
+        if update.message and update.message.text:
+            chat_id = update.message.chat_id
+            text = update.message.text
+
+            if text.startswith("/start"):
+                reply = "Halo Bro! Bot Gemini siap bantu kamu. Langsung ketik pertanyaanmu!"
+            else:
+                reply = await ask_gemini(text)
+
+            await bot.send_message(chat_id=chat_id, text=reply)
+
+    save_offset(offset)
+    print(f"Selesai. Offset terakhir: {offset}")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
